@@ -3,7 +3,7 @@ ticket: MIA-75
 linear_url: https://linear.app/mia360/issue/MIA-75/otvet-vernyj-kak-idti-dalshe
 status: Ready for Test
 mr_url: https://gitlab.com/ai-math/ai-math-web/-/merge_requests/271
-updated: 2026-07-20T08:18:37.371Z
+updated: 2026-07-20T08:18:37.399Z
 ---
 
 ## Контекст

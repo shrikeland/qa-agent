@@ -13,5 +13,40 @@
     "updatedAt": "2026-07-17T08:55:30.920Z",
     "hash": "4d3506c9ac1fb95f6f31665f215af0b4dceb8fbc2d36e6448b1e75e4740cb542",
     "noteFile": "notes/MIA-69.md"
+  },
+  "MIA-30": {
+    "updatedAt": "2026-07-20T08:27:27.912Z",
+    "hash": "5e9aac1935873d42ef107d24afcb128238caaf3bb9c8a18c26c06a31c575e70b",
+    "noteFile": "notes/MIA-30.md"
+  },
+  "MIA-31": {
+    "updatedAt": "2026-07-20T08:27:25.825Z",
+    "hash": "2ce12e4cf418fcf67c663fbfd51624e302f6d7f2f965b16a08f4b26e92c57d44",
+    "noteFile": "notes/MIA-31.md"
+  },
+  "MIA-82": {
+    "updatedAt": "2026-07-20T08:27:03.675Z",
+    "hash": "216f626e115727b1de13d3709b2ba22bba56e5d193a863468d611ecbf5d9ad73",
+    "noteFile": "notes/MIA-82.md"
+  },
+  "MIA-76": {
+    "updatedAt": "2026-07-20T08:21:32.145Z",
+    "hash": "2a2bc791604da50321d3ad185bc33940dccdd8532011939e5d55b3674a98432f",
+    "noteFile": "notes/MIA-76.md"
+  },
+  "MIA-56": {
+    "updatedAt": "2026-07-20T08:18:45.371Z",
+    "hash": "7055da960ff9a65f4803cebba4d191a987023a2cceeb67cf7db44dcf453a1864",
+    "noteFile": "notes/MIA-56.md"
+  },
+  "MIA-75": {
+    "updatedAt": "2026-07-20T08:18:37.399Z",
+    "hash": "6420d541ab477068d7f9b30b8da812439a2a9bd2ba10881dea421325fd501d0d",
+    "noteFile": "notes/MIA-75.md"
+  },
+  "MIA-77": {
+    "updatedAt": "2026-07-20T01:43:19.521Z",
+    "hash": "683c4aba183352bbbbb41a4d058fdafa9422688acd43f176f4561137ba15066d",
+    "noteFile": "notes/MIA-77.md"
   }
 }
