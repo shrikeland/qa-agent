@@ -1,9 +1,9 @@
 ---
 ticket: MIA-83
 linear_url: https://linear.app/mia360/issue/MIA-83/pravilnyj-otvet-zadaniya-dostupen-studentu-cherez-api-spisyvanie
-status: Ready for Test
-mr_url: https://gitlab.com/ai-math/ai-math-web/-/merge_requests/276
-updated: 2026-07-28T15:17:43.699Z
+status: Testing
+mr_url: https://gitlab.com/ai-math/ai-math-web/-/merge_requests/276, https://gitlab.com/ai-math/ai-math-web/-/merge_requests/296
+updated: 2026-07-29T16:26:49.577Z
 ---
 
 ## Контекст
@@ -12,9 +12,9 @@ Security-баг (label `Bug`, priority High): эндпоинты выдачи з
 
 Задача закрывалась в два захода:
 - MR !276 — основной fail-closed фикс утечки полей задания по трём каналам (HTTP `/assignments*`, HTTP submission/interaction-ответы, WS `TRAINER_INTERACTION_RECEIVE`/`DIAGNOSTIC_INTERACTION_RECEIVE`).
-- MR !296 — отдельный follow-up по проблеме, найденной уже в ходе QA-прогона первого фикса (наблюдение тестировщика): ни на одном канале (HTTP internal/public, WS) не проверялось владение сессией — id сессии/сабмишена берётся из клиентского пейлоада и раньше использовался без вопросов.
+- MR !296 — follow-up по проблеме, найденной уже в ходе QA-прогона первого фикса (наблюдение тестировщика): ни на одном канале (HTTP internal/public, WS) не проверялось владение сессией — id сессии/сабмишена берётся из клиентского пейлоада и раньше использовался без вопросов.
 
-Оба MR уже в master (текущий HEAD включает оба).
+Оба MR в master. Независимый ре-тест MR !296 (комментарий Andrei Chepurchenko, 2026-07-29) подтвердил, что заявка «владение сессией проверяется на всех каналах» выполнена не полностью: один канал — `POST /trainer/next-assignment` (и его WS-эквивалент `trainer:session:next-assignment`) — остался без проверки владения. Через него посторонний ученик, зная (не подбирая — это UUID) `trainerSessionId` чужой тренажёрной сессии, может не только прочитать чужую сессию, но и **сменить в ней текущее задание** — у владельца сессии задание переключается под ним. Утечки секретных полей (`answer`/`steps`/`hints`/`rules`/`examples`) через этот канал нет — белый список из MR !276 держится, исходный acceptance MIA-83 не нарушен. Нарушена именно цель MR !296. Статус тикета — снова `Testing`, MR под этот новый дефект пока не заведён (проверено по списку MR проекта после !296 — ни один не упоминает `next-assignment` или MIA-83 в этом контексте).
 
 ## Что было сломано
 
@@ -47,6 +47,20 @@ Security-баг (label `Bug`, priority High): эндпоинты выдачи з
 - `api/src/controllers/diagnostic.controller.ts`/`trainer.controller.ts` — точечные проверки «своя сессия + чужой submissionId»: `submissionInSession(submissionId, sessionId)` перед `update`/`delete`/`confirm` сабмишена (сверяет `submission.diagnosticSessionId`/`trainerSessionId` с сессией из пути) — сравнение целочисленного submissionId со своей сессией, отдельно от общего guard.
 - `socket-gateway/src/services/ai-math.api.ts` — все internal-запросы, которые раньше шли без идентификации, теперь передают `actingAs(userId)` → заголовок `x-user-id`, который читает `requireInternalSessionOwner` на API.
 - `socket-gateway/src/handlers/diagnostic/{change-assignment,interactions,join,submission,submissions-complete}.handler.ts`, `trainer.handler.ts` — прокидывают `user.id` в вызовы `aiMathApi`, которые теперь его требуют.
+
+**Не закрыто (найдено при перепроверке MR !296) — `POST /trainer/next-assignment` / WS `trainer:session:next-assignment`:**
+
+Разрыв подтверждён по коду (master, `d29d1a8`) в трёх местах плюс один дополнительный, который report-гипотеза не называла явно, но который тоже играет роль:
+
+1. **`api/src/routes/trainer.routes.ts`** — публичный роут `/trainer/next-assignment` (строки 288-306) навешивает только `preHandler: [requireTopicAccess(topicIdFromBody)]`. `requireOwnTrainerSession` отсутствует, хотя `sessionIdFrom` в guard'е умеет доставать `trainerSessionId` из `body` — сработал бы как есть, просто не подключен. Все соседние трейнер-роуты с session id в пути его несут: `/trainer/sessions/:id/interactions` (GET и POST), `/trainer/sessions/:id/submissions`, `/trainer/sessions/:trainerSessionId/submissions/:submissionId`, `/trainer/sessions/:trainerSessionId/interactions/last-response` — везде `preHandler: [requireOwnTrainerSession, requireTopicAccess(...)]`. `next-assignment` — единственный роут с `trainerSessionId` в теле, где этой пары нет.
+2. **`api/src/middleware/require-session-owner.ts`** — `INTERNAL_TRAINER = /^\/internal\/trainer\/sessions\//` (строка 85) не матчит `/internal/trainer/next-assignment` (роут объявлен в `api/src/routes/internal.routes.ts:490-507`, без собственного `preHandler`), поэтому и internal-вход (через socket-gateway) остаётся без проверки — `requireInternalSessionOwner` на этом url просто ничего не делает (`if`/`if` без `else`, функция молча возвращает).
+3. Внутри самого internal-вызова разрыв ещё глубже, чем в гипотезе автора отчёта: **`socket-gateway/src/services/ai-math.api.ts`**, метод `nextAssignmentTrainerSession` (строка 242), делает `api.post('/internal/trainer/next-assignment', { sessionId, userId, topicId, trainerSessionId })` **без `actingAs(userId)`** — то есть заголовок `x-user-id` вообще не отправляется на этот роут (все остальные internal-вызовы в этом файле его передают, `actingAs` встречается 15 раз в файле). Даже если бы регэксп совпал, guard'у не от чего было бы оттолкнуться.
+4. **`api/src/services/trainer-session.service.ts`** — `nextAssignment(trainerSessionId: string, _user: User)` (строка 66): параметр пользователя так и называется `_user` и в теле метода не используется ни разу — последний рубеж пуст. Контроллер (`api/src/controllers/trainer.controller.ts:193-216`, `nextAssignmentInTrainerSession`) берёт `userId` из тела запроса, резолвит юзера и проверяет им только доступ к теме (`accessService.canAccessTopic(user, topicId)`) — с `trainerSessionId` этот `user` не сверяется нигде.
+5. На WS-стороне (`socket-gateway/src/handlers/trainer.handler.ts:115-131`, `trainerNextAssignmentHandler`) единственная проверка — `sessionUserMemoryService.matchSessionToUser(user.id, payload.sessionId)`, а это сверка пользовательского socket/session id (`payload.sessionId`), а не `payload.trainerSessionId` — тренажёрная сессия, которую запрос реально трогает, этой проверкой не покрыта вообще.
+
+Симметрия с диагностикой, на которую ссылается отчёт, подтверждается: `diagnostic:session:join` тоже исключён из общего internal-хука (тем же комментарием в коде: «join — исключение, может создавать сессию»), но там владение проверяется отдельно, внутри `diagnostic-session.service.ts`. У `nextAssignment` в `trainer-session.service.ts` такой внутренней проверки нет — только формальный параметр `_user`.
+
+Важное отличие для `/trainer/join` / `/internal/trainer/join`, которые тоже не покрыты `INTERNAL_TRAINER`-регэкспом: это не тот же класс дыры. `trainerSessionService.joinSession(topicId, userId)` (строка 18) всегда сам находит сессию через `trainerSessionRepository.getOrCreate(userId, topicId, cycleNumber)` — присвоить туда чужой существующий `trainerSessionId` через тело запроса нельзя, join его даже не принимает как параметр. У диагностики join устроен иначе (принимает id и умеет присоединяться к существующей сессии), поэтому там и потребовалась явная проверка внутри сервиса. Тренажёрный join в этом смысле безопасен по конструкции, а не благодаря внешней проверке.
 
 ## Как перепроверить
 
