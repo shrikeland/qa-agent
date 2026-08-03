@@ -3,8 +3,11 @@ ticket: MIA-83
 linear_url: https://linear.app/mia360/issue/MIA-83/pravilnyj-otvet-zadaniya-dostupen-studentu-cherez-api-spisyvanie
 status: Ready for Test
 mr_url: https://gitlab.com/ai-math/ai-math-web/-/merge_requests/276
-updated: 2026-07-28T15:17:43.699Z
+updated: 2026-08-03
+status: Testing
 ---
+
+> **Обновление 03.08.2026:** ре-тест MR !296 от 29.07 нашёл, что проверка владения сессией закрыта не на всех каналах — `POST /trainer/next-assignment` и WS `trainer:session:next-assignment` остаются без гарда. **Перечитан код на актуальном состоянии ветки (MR !296) в этом прогоне — дефект всё ещё воспроизводим по коду**, см. первый пункт «Открытых вопросов».
 
 ## Контекст
 
@@ -74,6 +77,10 @@ Security-баг (label `Bug`, priority High): эндпоинты выдачи з
 13. Пара «своя сессия + чужой submissionId» на update/delete/confirm сабмишена (и trainer, и diagnostic) — 404, не 200.
 14. Отсутствие идентификации (нет куки на публичном роуте / нет `x-user-id` на internal) → 401, а не пропуск проверки — контроль того, что guard fail-closed, а не fail-open, как было раньше.
 
+**Владение сессией — незакрытый канал (см. «Открытые вопросы» п.0, приоритет):**
+15a. `POST /trainer/next-assignment` с `trainerSessionId` чужой сессии (свой валидный `topicId`) → ожидаемо сейчас 200 + реальная смена задания в чужой сессии (не 403) — известный незакрытый дефект, перепроверить первым.
+15b. То же через WS `trainer:session:next-assignment`.
+
 **Контрольная работа (не прогонялась вживую тестировщиком, механизм общий с диагностикой — важно закрыть отдельно):**
 15. Пройти `CONTROL_TEST` целиком (потребуется платный доступ или временный обход paywall — freemium блокирует старт) через тот же путь `joinDiagnosticSession`/`DiagnosticType.CONTROL_TEST`: убедиться, что секреты задания не текут ни по одному каналу и что владение сессией контрольной проверяется так же, как у диагностики (`control-test/results/[sessionId].vue`, `control-test/index.vue`).
 
@@ -88,5 +95,14 @@ Security-баг (label `Bug`, priority High): эндпоинты выдачи з
 - Кэш `entities:assignment:*`/`entities:diagnostic:*` хранит сырую запись из БД; фильтрация — на выходе (`toStudentAssignment`), при чтении из кэша тоже проходит, что стоит держать в уме, если менять способ сериализации.
 
 ## Открытые вопросы / не блокеры
+
+### Новое (ре-тест 29.07) — незакрытый канал владения сессией, приоритет при следующей проверке
+
+0. **`POST /trainer/next-assignment` и WS `trainer:session:next-assignment` не проверяют владение тренажёрной сессией.** Подтверждено чтением кода в этом прогоне на актуальном состоянии MR !296: маршрут `/trainer/next-assignment` (`api/src/routes/trainer.routes.ts:288-296`) навешивает только `requireTopicAccess(topicIdFromBody)` — `requireOwnTrainerSession` здесь не стоит, хотя на соседних session-роутах (join, submissions, interactions) стоит. На internal-входе тот же пробел: регулярка `INTERNAL_TRAINER = /^\/internal\/trainer\/sessions\//` (`require-session-owner.ts:85`) не матчит `/internal/trainer/next-assignment` — проверки нет и там. Последний рубеж тоже пуст: `trainerSessionService.nextAssignment(trainerSessionId, _user)` (`trainer-session.service.ts:74`) игнорирует переданного пользователя (параметр так и назван `_user`).
+   - **Эффект, подтверждённый на стенде в прошлом прогоне:** посторонний ученик B, зная (или подобрав) `trainerSessionId` ученика A, отправляет `POST /api/trainer/next-assignment` с чужим `trainerSessionId` → получает `200` с данными сессии A, и её текущее задание реально переключается — ученик A при переподключении видит новое задание, которое не выбирал. То же через WS `trainer:session:next-assignment`. Секретные поля задания при этом не текут (белый список из MR !276 отрабатывает) — исходный acceptance MIA-83 («студент не может получить правильный ответ») не нарушен, но нарушена вторая цель MR !296 («владение сессией на всех каналах»): чужую сессию можно читать и **менять**.
+   - Оговорка по эксплуатируемости: `trainerSessionId` — UUID, перебором не берётся, так что это не тот же по тяжести класс, что раньше найденные последовательные целочисленные id сабмишенов. Но диагностические сессии — тоже UUID, и они закрыты; расхождение именно внутри одного и того же фикса, что и настораживает.
+   - Проверить в первую очередь при ретесте: ученик B с собственным валидным `topicId` (проходит `requireTopicAccess`) шлёт `trainerSessionId` ученика A на `/trainer/next-assignment` (HTTP) и на `trainer:session:next-assignment` (WS) → ожидаемо (пока не исправлено) — 200 и реальная смена задания в чужой сессии, а не 403.
+
+### Из первого прогона (контекст, не блокер)
 
 - Ретраи `POST /auth/activate` (~10 повторных запросов при входе по `/ref/<token>`, последний ловит 429) — к MIA-83 отношения не имеет, не подтверждено (по коду `/ref/[token]` дёргает `activate` один раз), не блокер — не проверять в рамках этой задачи.
