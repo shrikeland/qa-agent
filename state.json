@@ -73,5 +73,10 @@
     "updatedAt": "2026-07-31T10:19:17.691Z",
     "hash": "5ada7debde7d2618fc388381452f40c402941715db4309558871ea7e1e6fc499",
     "noteFile": "notes/MIA-101.md"
+  },
+  "MIA-106": {
+    "updatedAt": "2026-08-04T09:45:08.779Z",
+    "hash": "91f701f024c3bf633979200e2929cdde466e7ea3bb7363aba52b1af35fbfd806",
+    "noteFile": "notes/MIA-106.md"
   }
 }
