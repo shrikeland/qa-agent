@@ -2,107 +2,101 @@
 ticket: MIA-83
 linear_url: https://linear.app/mia360/issue/MIA-83/pravilnyj-otvet-zadaniya-dostupen-studentu-cherez-api-spisyvanie
 status: Ready for Test
-mr_url: https://gitlab.com/ai-math/ai-math-web/-/merge_requests/276
-updated: 2026-08-03
-status: Testing
+mr_url: https://gitlab.com/ai-math/ai-math-web/-/merge_requests/296
+updated: 2026-08-19
 ---
 
-> **Обновление 03.08.2026:** ре-тест MR !296 от 29.07 нашёл, что проверка владения сессией закрыта не на всех каналах — `POST /trainer/next-assignment` и WS `trainer:session:next-assignment` остаются без гарда. **Перечитан код на актуальном состоянии ветки (MR !296) в этом прогоне — дефект всё ещё воспроизводим по коду**, см. первый пункт «Открытых вопросов».
+> **Обновление 19.08.2026:** финальный раунд фикса (MR !336, ветка `fix/MIA-83-trainer-session-ownership`, коммит `6e8bcdb1`) закрыл единственный оставшийся пробел из прошлого прогона — `POST /trainer/next-assignment` и WS `trainer:session:next-assignment` без проверки владения тренажёрной сессией. Премастер с этим фиксом уже влит в master (текущий HEAD `7accf5a8` включает все три раунда). Памятка ниже переписана под финальное состояние: три раунда — как контекст, шаги перепроверки — только актуальные.
 
 ## Контекст
 
-Security-баг (label `Bug`, priority High): эндпоинты выдачи заданий отдавали студенту секретные поля задания — правильный ответ (`answer`), эталонное решение (`steps`), методические `rules`/`hints`/`examples`. Это открывало списывание в тренажёре и, что серьёзнее, в диагностике — там утечка обесценивает замер уровня и позволяет накручивать mastery/прогресс.
+Security-баг (label `Bug`): эндпоинт выдачи заданий отдавал студенту правильный ответ (`answer`) и служебные поля (`rules`, эталонное решение) — списывание в тренажёре и, что серьёзнее, в диагностике (нечестный замер уровня, накрутка mastery/прогресса). Закрывалось тремя последовательными раундами, каждый следующий — по находке ре-теста предыдущего:
 
-Задача закрывалась в два захода:
-- MR !276 — основной fail-closed фикс утечки полей задания по трём каналам (HTTP `/assignments*`, HTTP submission/interaction-ответы, WS `TRAINER_INTERACTION_RECEIVE`/`DIAGNOSTIC_INTERACTION_RECEIVE`).
-- MR !296 — отдельный follow-up по проблеме, найденной уже в ходе QA-прогона первого фикса (наблюдение тестировщика): ни на одном канале (HTTP internal/public, WS) не проверялось владение сессией — id сессии/сабмишена берётся из клиентского пейлоада и раньше использовался без вопросов.
+- **MR !276** (`3c5665cf`, 20.07) — fail-closed выдача задания: единый белый список полей во всех студенческих ответах (HTTP `/assignments*`, submission/interaction-ответы) и во всех WS-эмитах (`TRAINER_INTERACTION_RECEIVE`/`DIAGNOSTIC_INTERACTION_RECEIVE`, включая busy/error-хелперы); клиентский флаг `hasAnswers` перестал на что-либо влиять; правильный ответ на результатах диагностики/контрольной — через новый гейтед эндпоинт `GET /diagnostic/sessions/:id/result-assignments`; убран debug-оверлей (4 клика по аватару Мии, дампивший задание с ответом). QA PASS по утечке секретов, но найдено наблюдение: владение сессией нигде не проверялось.
+- **MR !296** (`cc93830d`, 28.07) — проверка владения сессией на (почти) всех каналах: новый `require-session-owner.ts`, навешан на публичные роуты и единым hook'ом на все internal-роуты по форме URL; socket-gateway на каждом internal-вызове называет пользователя заголовком `x-user-id`; закрыты чтение/удаление/подтверждение чужих диагностических сессий и сабмишенов. Ре-тест нашёл ОДИН незакрытый канал: `POST /trainer/next-assignment` (HTTP) и WS `trainer:session:next-assignment` не проверяли владение — посторонний ученик мог переключить текущее задание чужого тренажёрного занятия (порча состояния, не утечка ответа).
+- **MR !336** (`6e8bcdb1`, влит в premaster 18.08, затем premaster → master) — финальный фикс именно этого канала: проверка владения встала в `trainerSessionService.nextAssignment`, закрывает разом WS и internal-путь; публичные легаси-роуты `/trainer/join` и `/trainer/next-assignment` (действовали от имени `userId` из тела запроса, `join` этим же способом отдавал чужой `trainerSessionId` — та же уязвимость, дававшая ключ к первой) — удалены целиком (нулевой трафик на проде/тесте, не вызывались ни фронтом, ни каким-либо клиентом). Шлюз на этом вызове стал последним из session-роутов, кто начал называть ученика заголовком.
 
-Оба MR уже в master (текущий HEAD включает оба).
+**Итог:** ответ задания (`answer`) студенту недоступен ни по одному из проверенных каналов; владение сессией (диагностической и тренажёрной) проверяется на HTTP (публичном и internal) и на WS. Грейдинг не затронут — полный `assignment` по-прежнему доступен только внутреннему пути.
 
-## Что было сломано
+## Что было сломано → что изменено
 
-1. **Утечка секретных полей задания студенту** (исходная проблема тикета):
-   - `GET /assignments/:id` и `GET /assignments?...&hasAnswers=1` — под `requireAuth`, но без фильтрации ответа, отдавали `answer`, `rules`, а с фичей эталонного решения отдавали бы и `steps`.
-   - `POST /internal/trainer/sessions/:id/interactions` (`addTrainerSessionInteraction`) тянул весь `assignment` через `getById` с `include: { assignment }` (все поля), а socket-gateway ретранслировал его в браузер сообщением `TRAINER_INTERACTION_RECEIVE` на каждый AI-ответ (9+ точек emit, включая busy/error-хелперы, которые вообще не чистились).
-   - Клиент действительно использовал `answer` — фронт грузил задания с `hasAnswers=1` (`trainer-session.ts`, 3 места в `diagnostic-session.ts`) для мгновенной client-side проверки ответа; убрать поле нельзя было без замены механизма проверки на серверный.
-   - Заодно был debug-оверлей в тренажёре, открывавшийся 4 кликами по аватару Мии и дампивший задание вместе с ответом.
+### 1. HTTP `/assignments*` — секреты в ответе задания
 
-2. **Отсутствие проверки владения сессией** (найдено при adversarial QA-прогоне первого фикса, комментарий тестировщика, наблюдение 1):
-   - Id диагностической/тренажёрной сессии приезжают из браузерного пейлоада и раньше использовались без сверки с текущим пользователем — ни на internal HTTP-роутах (вызываемых socket-gateway от имени студента), ни на публичных HTTP-роутах, ни в WS-хендлерах.
-   - Конкретно: `diagnostic:session:join` по чужому `diagnosticSessionId` отдавал статус/балл/текущее задание чужой сессии и даже записывал результат в дашборд-кэш того, кто запросил. `diagnostic:submission:reject`/`:accept` (`softDelete`/подтверждение) шли по одному `submissionId` (целочисленный, последовательный, перебираемый) без привязки к сессии и без проверки пользователя вообще — то есть чужие сабмишены можно было удалить или подтвердить. Смена текущего задания и запуск скоринга в чужой сессии — тем же способом. HTTP `GET /diagnostic|trainer/sessions/:id/submissions|interactions` и `POST /trainer/sessions/:id/interactions` отдавали/принимали чужие данные аналогично. Раньше guard был fail-open: «нет заголовка — нет проверки».
+**Было:** `GET /assignments/:id` и `GET /assignments?...&hasAnswers=1` под `requireAuth` отдавали `answer`, `rules` любому авторизованному, включая студента; `hasAnswers` — клиентский флаг, ничем не проверялся.
 
-## Что изменено (по коду)
+**Стало** (`api/src/utils/assignment-privacy.ts`, `api/src/controllers/assignment.controller.ts`):
+- `toStudentAssignment(assignment)` — fail-closed белый список: `id`, `topic.id`, `task`, `expression`, `trainerUnit` (+ `kind`/`mlLevel`/`presentedSolution` по схеме `IAssignmentPublic`). Новое поле в модели `Assignment` по умолчанию НЕ попадает в студенческий ответ — его нужно добавить в список явно.
+- `getAssignments` больше не смотрит на `hasAnswers` из query вообще — всегда мапит через `toStudentAssignment`.
+- `handleGetAssignmentById` получил `includeSecrets`: `false` для публичного `getAssignmentByIdHandler` (белый список), `true` только для internal-хендлера, отдающего полный `IAssignmentWithAnswerPublic` (`answer`, `hints`, `rules`, `steps`, `examples`) — используется грейдингом.
+- Правильный ответ на результатах диагностики/контрольной — отдельный гейтед путь (см. п.3), не через `/assignments*`.
 
-**MR !276 — санитизация полей задания (fail-closed белый список):**
+### 2. WS `TRAINER_INTERACTION_RECEIVE` / `DIAGNOSTIC_INTERACTION_RECEIVE` — тот же класс утечки, но по сокету
 
-- `api/src/utils/assignment-privacy.ts` — `toStudentAssignment(assignment)`: белый список полей для студенческой выдачи (`id`, `topic.id`, `task`, `expression`, `trainerUnit`, `kind`, `mlLevel`, `presentedSolution`); `answer`/`rules`/`steps`/`hints`/`examples` не входят. Отдельно `toStudentAssignmentWithAnswer` — тот же белый список плюс `answer` (без steps/hints/rules/examples), используется только там, где владение сессией и её завершённость уже проверены на сервере.
-- `api/src/controllers/assignment.controller.ts` — `getAssignments` больше не смотрит на клиентский `hasAnswers` (комментарий в коде явно это фиксирует), всегда мапит через `toStudentAssignment`. `handleGetAssignmentById` разведён на два хендлера: публичный `getAssignmentByIdHandler` (`includeSecrets=false`, белый список) и внутренний `getInternalAssignmentByIdHandler` (`includeSecrets=true`, полный `IAssignmentWithAnswerPublic` с `answer`/`hints`/`rules`/`steps`/`examples` — используется только грейдингом через `/internal/assignments/:id`).
-- `diagnostic.controller.ts` — новый эндпоинт `getDiagnosticSessionResultAssignments` (`GET /diagnostic/sessions/:id/result-assignments`): проверяет `session.userId === currentUser.id` (403 иначе) и `session.finishedAt` (403 «not finished yet» иначе — специально `finishedAt`, а не `scoredAt`, т.к. сессия с незакрытым `REVIEW_ERROR` submission остаётся `IN_PROGRESS`/unscored, но уже показывается студенту как «результаты готовы»). Дальше берёт только сабмишены самой сессии (`resultAssignmentsBySession`, отфильтрованные по `SCORED`/`SCORE_CONFIRMED` и `deletedAt: null`) и мапит через `toStudentAssignmentWithAnswer` — то есть студент получает свой правильный ответ только по решённым в его завершённой сессии заданиям.
-- `socket-gateway/src/helpers/assignment-privacy.helper.ts` — зеркальный белый список для WS (`id`, `topicId`, `task`, `expression`, `steps: []`).
-- `socket-gateway/src/helpers/handler.helper.ts` — все эмиты `TRAINER_INTERACTION_RECEIVE`/`DIAGNOSTIC_INTERACTION_RECEIVE` (обычный ответ, bad-recognition, bad-review, error, busy) прогоняют `assignment` через `toStudentAssignment` перед отправкой в сокет.
-- Фронт (`frontend/stores/trainer-session.ts`, `diagnostic-session.ts`) больше не запрашивает `hasAnswers=1`; результаты диагностики/контрольной (`frontend/pages/diagnostic/results/[sessionId].vue`, `control-test/results/[sessionId].vue`) переведены на новый гейтед-эндпоинт; debug-оверлей по 4 кликам на аватар убран из `trainer/[topicId].vue`, `diagnostic/[[diagnosticId]].vue`, `control-test/index.vue`.
+**Было:** `POST /internal/trainer/sessions/:id/interactions` тянул весь `assignment` (`include: { assignment }`, все поля) для грейдинга; socket-gateway ретранслировал его студенту в браузер тем же объектом на каждый AI-ответ, включая busy/error-хелперы.
 
-**MR !296 — проверка владения сессией:**
+**Стало** (`socket-gateway/src/helpers/assignment-privacy.helper.ts`, `handler.helper.ts`, `handlers/diagnostic/interactions.handler.ts`): зеркальный белый список `toStudentAssignment` на стороне gateway (`id`, `topicId`, `task`, `expression`, `steps: []`); прогоняется перед КАЖДЫМ emit `TRAINER_INTERACTION_RECEIVE`/`DIAGNOSTIC_INTERACTION_RECEIVE` — обычный ответ, bad-recognition, bad-review, critical-error, busy. Ни один из этих путей больше не может случайно пронести необрезанный `assignment` в браузер.
 
-- `api/src/middleware/require-session-owner.ts` (новый) — единый guard. Достаёт id сессии из `params`/`body` (`diagnosticSessionId`/`trainerSessionId`/`id`, params раньше body), определяет владельца через репозиторий (`diagnosticSessionRepository.getById`/`trainerSessionRepository.get`), сверяет с actingUserId. Источник actingUserId различается по типу маршрута: публичные — `request.currentUser.id` (кука, `requireAuth`), internal — заголовок `x-user-id` (кладёт сам socket-gateway). Нет заголовка/куки → 401 (fail-closed, не «пропустить проверку»); сессия не найдена → 404; чужая → 403.
-  - `requireOwnDiagnosticSession`/`requireOwnTrainerSession` — навешаны точечно на публичные роуты (`diagnostic.routes.ts`, `trainer.routes.ts`).
-  - `requireInternalSessionOwner` — один global `preHandler`-хук на весь `internalRoutes`, матчит по форме URL (`/internal/diagnostic/(sessions/|try-score|long-processing-result)`, `/internal/trainer/sessions/`), так что новый internal-роут с session id получает проверку автоматически, без необходимости вспомнить о ней отдельно. Join — исключение (может создавать сессию), владение проверяется внутри `diagnostic-session.service.ts`.
-- `api/src/controllers/diagnostic.controller.ts`/`trainer.controller.ts` — точечные проверки «своя сессия + чужой submissionId»: `submissionInSession(submissionId, sessionId)` перед `update`/`delete`/`confirm` сабмишена (сверяет `submission.diagnosticSessionId`/`trainerSessionId` с сессией из пути) — сравнение целочисленного submissionId со своей сессией, отдельно от общего guard.
-- `socket-gateway/src/services/ai-math.api.ts` — все internal-запросы, которые раньше шли без идентификации, теперь передают `actingAs(userId)` → заголовок `x-user-id`, который читает `requireInternalSessionOwner` на API.
-- `socket-gateway/src/handlers/diagnostic/{change-assignment,interactions,join,submission,submissions-complete}.handler.ts`, `trainer.handler.ts` — прокидывают `user.id` в вызовы `aiMathApi`, которые теперь его требуют.
+### 3. Правильный ответ на результатах — новый гейтед эндпоинт
 
-## Как перепроверить
+**Стало** (`api/src/controllers/diagnostic.controller.ts`, роут в `diagnostic.routes.ts`): `GET /diagnostic/sessions/:id/result-assignments` — единственное место, где студент вообще может получить `answer`. Проверяет `session.userId === currentUser.id` (иначе 403), затем `session.finishedAt` (иначе 403 «not finished yet» — сознательно `finishedAt`, а не `scoredAt`: сессия с незакрытым `REVIEW_ERROR`-сабмишеном остаётся `IN_PROGRESS`/unscored, но уже показана студенту как «результаты готовы»). Отдаёт `toStudentAssignmentWithAnswer` (белый список + `answer`, без `steps/hints/rules/examples`) только по сабмишенам самой этой сессии.
 
-Основа — уже проведённый adversarial QA-прогон на `test-1` (PASS по MR !276), актуализированный под оба MR. Стенд: два студента через `/auth/register` → `/auth/activate`.
+### 4. Владение диагностической сессией — join, submission reject/accept и остальные каналы
 
-**HTTP, санитизация полей (MR !276):**
-1. `/assignments?trainerId=...` и `?diagnosticId=...`, в т.ч. с попытками обхода `hasAnswers` (`1`, `true`, разный регистр, массив, дубль параметра, посторонний `includeSecrets`) — в ответе только `id/topic/task/expression/trainerUnit/kind/mlLevel/presentedSolution`, ни `answer`, ни `rules`/`steps`/`hints`/`examples`.
-2. `GET /assignments/:id` — то же самое.
-3. `POST`/`PUT` submissions (trainer и diagnostic) — `assignment` в ответе без секретов.
-4. `/api/internal/*` без ключа → 401; `/api/system/*` → 401; Swagger → 404.
+**Было:** id сессии/сабмишена бралось из клиентского пейлоада без проверки владельца — ни на internal HTTP (socket-gateway → API от имени студента), ни на публичных HTTP-роутах, ни в WS. Конкретно: `diagnostic:session:join` по чужому `diagnosticSessionId` отдавал статус/балл/текущее задание чужой сессии и даже писал результат в дашборд-кэш вызывающего под чужим владельцем; `diagnostic:submission:reject`/`:accept` (удаление/подтверждение сабмишена) работали по одному целочисленному последовательному `submissionId` без всякой привязки к сессии — самое серьёзное из найденного, порча чужих результатов; смена текущего задания и запуск скоринга в чужой сессии — тем же способом; HTTP `GET /diagnostic/sessions/:id/submissions|interactions` отдавали чужие данные.
 
-**WS, санитизация полей (MR !276):**
-5. Тренажёр: прогон чата с `:request_hint:`, `:request_steps:`, `:request_theory:`, `:request_example:` — просмотреть все кадры `TRAINER_INTERACTION_RECEIVE` (в т.ч. busy/error-варианты, если удаётся спровоцировать) на предмет `answer`/`hints`/`rules`/`steps`(не `[]`)/`examples`.
-6. Диагностика: полный прогон нескольких заданий, то же для `DIAGNOSTIC_INTERACTION_RECEIVE`.
+**Стало** (`api/src/middleware/require-session-owner.ts`, `api/src/routes/{diagnostic,internal}.routes.ts`, `socket-gateway/src/services/ai-math.api.ts`, `socket-gateway/src/handlers/diagnostic/*.handler.ts`):
+- `requireOwnDiagnosticSession` — на публичных роутах, источник identity — `request.currentUser.id` (кука).
+- `requireInternalSessionOwner` — единый `preHandler`-хук на ВЕСЬ `internalRoutes`, матчит по форме URL (`/internal/diagnostic/(sessions/|try-score|long-processing-result)`), так что новый internal-роут с session id получает проверку автоматически, без необходимости отдельно об этом вспомнить; identity — заголовок `x-user-id`, который теперь на каждый internal-вызов кладёт socket-gateway (`actingAs(userId)` в `ai-math.api.ts`).
+- `join` — исключение общего guard'а (может создавать сессию), владение сверяется внутри `diagnostic-session.service.ts` при резюме существующей сессии по `diagnosticSessionId`.
+- `submissionInSession(submissionId, diagnosticSessionId)` в `diagnostic.controller.ts` — отдельная проверка «своя сессия, но чужой submissionId» перед update/delete/confirm сабмишена (сверяет `submission.diagnosticSessionId` с сессией из пути).
+- Отсутствие identity (нет куки / нет `x-user-id`) → 401, fail-closed, а не пропуск проверки.
 
-**Результаты диагностики (MR !276):**
-7. `GET /diagnostic/sessions/:id/result-assignments`: своя завершённая сессия → 200, свой `answer`, без `steps/hints/rules/examples`; чужая → 403; своя незавершённая → 403 «not finished yet»; несуществующий/битый id → 404; без cookie → 401.
+### 5. Владение тренажёрной сессией — interactions и next-assignment (закрыто в MR !296 частично, полностью — в MR !336)
 
-**Владение сессией (MR !296 — тестировщик это ещё не перепроверял, ключевой новый пункт):**
-8. WS `diagnostic:session:join` с чужим `diagnosticSessionId` → должен быть отклонён (раньше отдавал `session:init` с чужим статусом/баллом/текущим заданием и писал в чужой дашборд-кэш) — перепроверить именно то, что было наблюдением 1 в прошлом прогоне и на что закрыт MR !296.
-9. WS `diagnostic:submission:reject`/`:accept` с чужим `submissionId` (в т.ч. подобрать соседний целочисленный id) — должен быть отклонён; ранее вёл в `softDelete`/подтверждение без всякой проверки.
-10. WS смена текущего задания / запуск скоринга в чужой сессии — отклонено.
-11. Запись в чужой чат тренажёра через `POST /trainer/sessions/:id/interactions` (или WS-эквивалент) — отклонено.
-12. HTTP `GET /diagnostic|trainer/sessions/:id/submissions|interactions` с чужим `:id` → 403 (ранее отдавал чужие сабмишены/переписку).
-13. Пара «своя сессия + чужой submissionId» на update/delete/confirm сабмишена (и trainer, и diagnostic) — 404, не 200.
-14. Отсутствие идентификации (нет куки на публичном роуте / нет `x-user-id` на internal) → 401, а не пропуск проверки — контроль того, что guard fail-closed, а не fail-open, как было раньше.
+**Было (MR !296, ре-тест нашёл):** `POST /trainer/next-assignment` и WS `trainer:session:next-assignment` не проверяли владение. Причина — сразу в трёх местах: (1) роут `/trainer/next-assignment` имел только `requireTopicAccess`, без `requireOwnTrainerSession`; (2) регэксп `INTERNAL_TRAINER = /^\/internal\/trainer\/sessions\//` не матчил `/internal/trainer/next-assignment`; (3) `trainerSessionService.nextAssignment(trainerSessionId, _user)` игнорировал переданного пользователя (параметр так и назывался `_user`). Эффект, подтверждённый на стенде: ученик B, передав `trainerSessionId` ученика A, получал 200 и реально переключал текущее задание в чужой сессии — подтверждено переподключением A. Секреты задания при этом не текли (белый список из MR !276 отрабатывал) — порча состояния, не списывание.
 
-**Владение сессией — незакрытый канал (см. «Открытые вопросы» п.0, приоритет):**
-15a. `POST /trainer/next-assignment` с `trainerSessionId` чужой сессии (свой валидный `topicId`) → ожидаемо сейчас 200 + реальная смена задания в чужой сессии (не 403) — известный незакрытый дефект, перепроверить первым.
-15b. То же через WS `trainer:session:next-assignment`.
+**Стало (MR !336):**
+- `trainer-session.service.ts` — `nextAssignment(trainerSessionId, user)` теперь сверяет `trainerSession.userId !== user.id` → бросает `ERRORS.forbidden` (403), проверка внутри сервиса закрывает разом и internal HTTP-путь, и WS-путь через шлюз (не нужно чинить регэксп маршрутизации отдельно).
+- `socket-gateway/src/services/ai-math.api.ts` — `nextAssignmentTrainerSession` теперь шлёт `actingAs(userId)` (заголовок `x-user-id`) на `/internal/trainer/next-assignment` — раньше это был последний из session-вызовов шлюза, который не называл пользователя.
+- **Публичные `/trainer/join` и `/trainer/next-assignment` удалены целиком** (не запатчены) — они действовали от имени `userId` из тела запроса, а `/trainer/join` тем же способом отдавал `trainerSessionId` любого пользователя, чей `userId` назвали в теле — то есть сам был источником «ключа» для атаки на next-assignment (второй, не описанный в отчёте прошлого прогона дефект: вход в занятие сам отдавал чужой session id без перебора). Оба роута — легаси, нулевой трафик на проде/тесте, не вызывались ни фронтом, ни клиентом за всю историю репозитория. Internal-эквиваленты (`/internal/trainer/join`, `/internal/trainer/next-assignment`) остались — их вызывает только socket-gateway, привязка к пользователю там теперь через `x-user-id` + сверку в сервисе.
+- `requireOwnTrainerSession` уже стоял (с MR !296) на `/trainer/sessions/:id/interactions`, `/trainer/sessions/:id/submissions`, create/update submission, `last-response` — этих каналов правка не касалась, но по ним стоит пройтись регрессом (см. ниже).
 
-**Контрольная работа (не прогонялась вживую тестировщиком, механизм общий с диагностикой — важно закрыть отдельно):**
-15. Пройти `CONTROL_TEST` целиком (потребуется платный доступ или временный обход paywall — freemium блокирует старт) через тот же путь `joinDiagnosticSession`/`DiagnosticType.CONTROL_TEST`: убедиться, что секреты задания не текут ни по одному каналу и что владение сессией контрольной проверяется так же, как у диагностики (`control-test/results/[sessionId].vue`, `control-test/index.vue`).
+## Шаги перепроверки
 
-**Соцынженерия (регресс прошлого прогона, можно не повторять подробно, но держать в уме):** прямые просьбы к Мии выдать `answer`/поле ответа не должны срабатывать.
+Стенд: два студента (A — «жертва», B — «атакующий») через `/auth/register` → `/auth/activate`, у обоих активная тренажёрная и диагностическая сессия по своим темам.
+
+**Секреты задания (регресс MR !276 — должно продолжать работать):**
+1. `GET /assignments?trainerId=...`/`?diagnosticId=...`, в т.ч. с `hasAnswers=1`/`true`/иным регистром — в ответе только белый список полей, ни `answer`, ни `rules`/`steps`/`hints`/`examples`.
+2. `GET /assignments/:id` — то же.
+3. Тренажёр и диагностика: полный прогон нескольких заданий (включая `:request_hint:`/`:request_steps:`/`:request_example:` в чате), просмотреть кадры `TRAINER_INTERACTION_RECEIVE`/`DIAGNOSTIC_INTERACTION_RECEIVE`, включая спровоцированные busy/error-варианты — секретов нет нигде.
+4. `GET /diagnostic/sessions/:id/result-assignments`: своя завершённая сессия A → 200 с `answer` только по своим сабмишенам; чужая (B запрашивает сессию A) → 403; своя незавершённая → 403 «not finished yet»; несуществующий id → 404; без cookie → 401.
+
+**Владение диагностической сессией (регресс MR !296 — должно продолжать работать):**
+5. B отправляет WS `diagnostic:session:join` с `diagnosticSessionId` сессии A → отказ (не отдаёт статус/балл/текущее задание A, не пишет в дашборд-кэш B под чужим владельцем).
+6. B отправляет WS `diagnostic:submission:reject`/`:accept` с `submissionId` сабмишена A (в т.ч. соседний по номеру id) → отказ, сабмишен A не удалён и не подтверждён.
+7. B шлёт HTTP `GET /diagnostic/sessions/:id/submissions` и `/interactions` с `:id` = сессия A → 403.
+8. B шлёт update/delete/confirm сабмишена в СВОЕЙ сессии, но с чужим (A) `submissionId` → 404, не 200.
+
+**Владение тренажёрной сессией — главный фокус этого прогона (MR !336, финальный фикс):**
+9. B отправляет `POST /trainer/next-assignment` с `trainerSessionId` сессии A (свой валидный `topicId`) → ожидание: **404** (маршрут удалён целиком, не 401/403 и не общая поломка — проверить, что это именно отсутствие роута, а не сбой сервера).
+10. B отправляет WS `trainer:session:next-assignment` с `trainerSessionId` сессии A → ожидание: отказ (403/forbidden по сути; конкретный код на клиенте — по факту события, задание в приложении B не переключается). Дополнительно проверить, что задание в СЕССИИ A НЕ МЕНЯЕТСЯ — переподключить клиента A (или дождаться его следующего обновления) и убедиться, что текущее задание то же, что было до попытки B.
+11. Контроль на A: пока идёт п.10, A продолжает нормально пользоваться тренажёром — переключение следующего задания по СВОЕМУ `trainerSessionId` у A работает как раньше (200, задание меняется).
+12. B отправляет `POST /trainer/join` (публичный, удалённый роут) с `userId` A и своим `topicId` → ожидание: 404 (роут отсутствует), убедиться что не отдаётся `trainerSessionId` A ни в каком виде.
+13. B отправляет HTTP `GET /trainer/sessions/:id/interactions|submissions` и create/update submission с `:id`/`trainerSessionId` сессии A → 403 (регресс MR !296, `requireOwnTrainerSession`).
+
+**Соцынженерия (регресс прошлых прогонов):** прямые просьбы к Мии выдать `answer`/поле ответа не должны срабатывать ни в тренажёре, ни в диагностике.
 
 ## Что посмотреть рядом (регресс)
 
-- Грейдинг тренажёра и диагностики продолжает работать: `isCorrect`/`score` считаются верно (полный `assignment` по-прежнему доступен грейдингу через `/internal/assignments/:id`, `getInternalAssignmentByIdHandler`).
-- UI разбора диагностики показывает «Твой ответ / Правильный ответ» на новом гейтед-эндпоинте.
-- Тренажёр загружает `/assignments?trainerId=...` без `hasAnswers` и без ответов, при этом продолжает нормально показывать карточки заданий (в т.ч. v3 find-error задания, которые подмешиваются отдельным запросом `findFindErrorByTrainer`).
-- Подсказки (`hints`) — server-enrichment вынесен в отдельную задачу MIA-87; здесь важно не то, что подсказки стали содержательнее, а что они по-прежнему приходят (регресс генеративного фолбэка не должен быть задет этим тикетом).
-- Кэш `entities:assignment:*`/`entities:diagnostic:*` хранит сырую запись из БД; фильтрация — на выходе (`toStudentAssignment`), при чтении из кэша тоже проходит, что стоит держать в уме, если менять способ сериализации.
+- Грейдинг тренажёра и диагностики продолжает работать корректно: `isCorrect`/`score` считаются верно — полный `assignment` (с `answer`) по-прежнему доступен грейдингу через internal-путь (`getInternalAssignmentByIdHandler`, `aiMathApi.getAssignment` в socket-gateway перед сверкой ответа).
+- `GET /diagnostic/sessions/:id/result-assignments` — UI разбора диагностики/контрольной показывает «твой ответ / правильный ответ» на этом эндпоинте, не деградировал по сравнению с прошлым способом.
+- Свой чат тренажёра (`POST /trainer/sessions/:id/interactions`) и свои сабмишены (create/update) у A и B по отдельности продолжают работать без 403 — гард не должен ловить легитимные собственные запросы как чужие.
+- Тренажёр у A: обычный флоу (следующее задание по СВОЕЙ сессии, отправка решения, получение результата) — 200 везде, задание меняется штатно.
+- Диагностика/контрольная у A и B по отдельности: join, ответ на задание, завершение сессии, просмотр результатов — без регресса.
+- Кэш `entities:assignment:*`/`entities:diagnostic:*` хранит сырую запись из БД; фильтрация происходит на выходе (`toStudentAssignment`) — если менять способ сериализации, не забыть, что чтение из кэша тоже должно проходить через белый список.
 
-## Открытые вопросы / не блокеры
+## Открытые вопросы
 
-### Новое (ре-тест 29.07) — незакрытый канал владения сессией, приоритет при следующей проверке
-
-0. **`POST /trainer/next-assignment` и WS `trainer:session:next-assignment` не проверяют владение тренажёрной сессией.** Подтверждено чтением кода в этом прогоне на актуальном состоянии MR !296: маршрут `/trainer/next-assignment` (`api/src/routes/trainer.routes.ts:288-296`) навешивает только `requireTopicAccess(topicIdFromBody)` — `requireOwnTrainerSession` здесь не стоит, хотя на соседних session-роутах (join, submissions, interactions) стоит. На internal-входе тот же пробел: регулярка `INTERNAL_TRAINER = /^\/internal\/trainer\/sessions\//` (`require-session-owner.ts:85`) не матчит `/internal/trainer/next-assignment` — проверки нет и там. Последний рубеж тоже пуст: `trainerSessionService.nextAssignment(trainerSessionId, _user)` (`trainer-session.service.ts:74`) игнорирует переданного пользователя (параметр так и назван `_user`).
-   - **Эффект, подтверждённый на стенде в прошлом прогоне:** посторонний ученик B, зная (или подобрав) `trainerSessionId` ученика A, отправляет `POST /api/trainer/next-assignment` с чужим `trainerSessionId` → получает `200` с данными сессии A, и её текущее задание реально переключается — ученик A при переподключении видит новое задание, которое не выбирал. То же через WS `trainer:session:next-assignment`. Секретные поля задания при этом не текут (белый список из MR !276 отрабатывает) — исходный acceptance MIA-83 («студент не может получить правильный ответ») не нарушен, но нарушена вторая цель MR !296 («владение сессией на всех каналах»): чужую сессию можно читать и **менять**.
-   - Оговорка по эксплуатируемости: `trainerSessionId` — UUID, перебором не берётся, так что это не тот же по тяжести класс, что раньше найденные последовательные целочисленные id сабмишенов. Но диагностические сессии — тоже UUID, и они закрыты; расхождение именно внутри одного и того же фикса, что и настораживает.
-   - Проверить в первую очередь при ретесте: ученик B с собственным валидным `topicId` (проходит `requireTopicAccess`) шлёт `trainerSessionId` ученика A на `/trainer/next-assignment` (HTTP) и на `trainer:session:next-assignment` (WS) → ожидаемо (пока не исправлено) — 200 и реальная смена задания в чужой сессии, а не 403.
-
-### Из первого прогона (контекст, не блокер)
-
-- Ретраи `POST /auth/activate` (~10 повторных запросов при входе по `/ref/<token>`, последний ловит 429) — к MIA-83 отношения не имеет, не подтверждено (по коду `/ref/[token]` дёргает `activate` один раз), не блокер — не проверять в рамках этой задачи.
+- **`userId` в `addTrainerSessionInteraction` по-прежнему берётся из тела запроса, а не из проверенной сессии.** В `api/src/controllers/trainer.controller.ts` (`addTrainerSessionInteraction`) стоит `const { userId, ... } = request.body;` и комментарий `// @todo check session` остался нетронутым. Гард `requireOwnTrainerSession` теперь не даёт B писать в СЕССИЮ A (сессия закрыта владением), но автор записи внутри своей же сессии — по-прежнему клиентское поле `userId` из тела, а не `request.currentUser.id`. Не эксплуатируется тем способом, который проверялся в этом тикете (чужую сессию так испортить нельзя), но сам паттерн остаётся вне явного скоупа MIA-83.
+- **`CONTROL_TEST` (контрольная работа) вживую так и не была прогнана** ни в одном из трёх раундов — freemium упирается в paywall при старте, нужен платный доступ или временный обход. Механизм общий с диагностикой (тот же `joinDiagnosticSession`/`DiagnosticType.CONTROL_TEST`, тот же `result-assignments`), но стоит закрыть отдельным прогоном именно на `control-test/*`, если появится доступ.
+- **Сохранение снимка доски (`POST /internal/whiteboard-blobs`) принимает `diagnosticSessionId`/`trainerSessionId` из тела без проверки владения.** Найдено по ходу анализа кода этого раунда — URL не попадает под шаблоны `requireInternalSessionOwner` (`INTERNAL_DIAGNOSTIC`/`INTERNAL_TRAINER` не матчат `/internal/whiteboard-blobs`), а `whiteboard-blob.controller.ts` принимает `userId`/`diagnosticSessionId`/`trainerSessionId` из `CreateBody` как есть. Тот же класс проблемы (session id из клиентского пейлоада без сверки владельца), что и весь этот тикет, но вне его явного скоупа (утечки ответа это не даёт — снимок доски не содержит `answer`) — стоит завести отдельным тикетом, если не заведён.
