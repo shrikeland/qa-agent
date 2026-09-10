@@ -173,5 +173,20 @@
     "updatedAt": "2026-09-07T11:50:50.322Z",
     "hash": "6df8b5a4d25fe3619a8ebeb70ae9c2d52a46e29ce431cd7fe545241990a14c45",
     "noteFile": "notes/MIA-143.md"
+  },
+  "MIA-158": {
+    "updatedAt": "2026-09-10T05:55:19.852Z",
+    "hash": "9050fa832715d816d3c124df5a099f28ef1403fc302c89316a8d17499e9e3e02",
+    "noteFile": "notes/MIA-158.md"
+  },
+  "MIA-161": {
+    "updatedAt": "2026-09-10T03:36:03.260Z",
+    "hash": "24a1a96bad6e65ad824f17eb81d705aba814c690b1b73abb8ea3fe0997745832",
+    "noteFile": "notes/MIA-161.md"
+  },
+  "MIA-160": {
+    "updatedAt": "2026-09-09T09:53:29.380Z",
+    "hash": "a2fa557102060c9064c04ac41f52e4ba4912cbb1139fffd32163303569de8dc7",
+    "noteFile": "notes/MIA-160.md"
   }
 }
