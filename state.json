@@ -235,13 +235,13 @@
     "noteFile": "notes/MIA-17.md"
   },
   "MIA-191": {
-    "updatedAt": "2026-09-20T10:30:58.788Z",
-    "hash": "34d9f5b4940c5817d9658553df26028966c2a7ccf9c8f5d3e5d059f45de80e33",
+    "updatedAt": "2026-09-21T10:44:41.005Z",
+    "hash": "c52da29f5bae4c596d8bcb76e3d6aa4c980542087582077b2d01563c108c7934",
     "noteFile": "notes/MIA-191.md"
   },
   "MIA-177": {
-    "updatedAt": "2026-09-19T07:58:22.657Z",
-    "hash": "b8f11b4de66a155a61c9535291a59832042acfa921bb50a2a40327d288386545",
+    "updatedAt": "2026-09-21T11:30:44.923Z",
+    "hash": "c1765b402337b8bdbfe3ef0b8b59e6ac21ab342043fc50ec6bb36d4a12fbd0f5",
     "noteFile": "notes/MIA-177.md"
   },
   "MIA-200": {
@@ -270,23 +270,33 @@
     "noteFile": "notes/MIA-196.md"
   },
   "MIA-195": {
-    "updatedAt": "2026-09-18T14:18:15.381Z",
-    "hash": "b26c61f3e3cf1aeca83ac284def088ccf0d04cf1070ccac8402adde465baf427",
+    "updatedAt": "2026-09-21T15:41:25.951Z",
+    "hash": "3708d51802ef0ff218cfed50a3f0c967b138a2692c507d43f46bb59eac569d9e",
     "noteFile": "notes/MIA-195.md"
   },
   "MIA-194": {
-    "updatedAt": "2026-09-18T14:18:14.635Z",
-    "hash": "f5c19f6f1b2b273077c5d383537474aa70fa13448e19eb9080ba7d394dcec0af",
+    "updatedAt": "2026-09-21T15:38:10.008Z",
+    "hash": "feabbca27c239169a285bf87801dfde23ce4b691739a888c165febec6cdf588e",
     "noteFile": "notes/MIA-194.md"
   },
   "MIA-193": {
-    "updatedAt": "2026-09-18T14:18:12.215Z",
-    "hash": "97358780cae83a8178e7732af5939eef6ab9d2c61d823abee32b987f062a0ad1",
+    "updatedAt": "2026-09-21T11:44:55.522Z",
+    "hash": "bfd1a4232cee4b52722e12f9e43d15925e01787dff28defdbf628c8f74c954ab",
     "noteFile": "notes/MIA-193.md"
   },
   "MIA-178": {
-    "updatedAt": "2026-09-18T13:35:34.317Z",
-    "hash": "7401293e06ccf59e3b57f83472eb211c02a3be74faace6f7a1cb7d224cffd2db",
+    "updatedAt": "2026-09-21T11:30:49.601Z",
+    "hash": "eb315cfb788a5b9fe8402a0b19d9372ad5030da2289e437cc3b131e407ae741e",
     "noteFile": "notes/MIA-178.md"
+  },
+  "MIA-155": {
+    "updatedAt": "2026-09-22T06:08:48.230Z",
+    "hash": "95263a1610d968651115ea3655d1a7cff9f459773d11618fafaa0c807b75855d",
+    "noteFile": "notes/MIA-155.md"
+  },
+  "MIA-139": {
+    "updatedAt": "2026-09-22T06:08:47.689Z",
+    "hash": "25e3820f07a189460ba88de5ac7aee1e8fa7d75d2da9c50fec991fa12689593f",
+    "noteFile": "notes/MIA-139.md"
   }
 }
